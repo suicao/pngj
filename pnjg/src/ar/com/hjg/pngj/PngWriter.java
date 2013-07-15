@@ -10,11 +10,13 @@ import java.util.zip.DeflaterOutputStream;
 
 import ar.com.hjg.pngj.chunks.ChunkCopyBehaviour;
 import ar.com.hjg.pngj.chunks.ChunkHelper;
+import ar.com.hjg.pngj.chunks.ChunkPredicate;
 import ar.com.hjg.pngj.chunks.ChunksList;
 import ar.com.hjg.pngj.chunks.ChunksListForWrite;
 import ar.com.hjg.pngj.chunks.PngChunk;
 import ar.com.hjg.pngj.chunks.PngChunkIEND;
 import ar.com.hjg.pngj.chunks.PngChunkIHDR;
+import ar.com.hjg.pngj.chunks.PngChunkPLTE;
 import ar.com.hjg.pngj.chunks.PngChunkTextVar;
 import ar.com.hjg.pngj.chunks.PngMetadata;
 
@@ -72,7 +74,7 @@ public class PngWriter {
 
 	protected byte[] rowbprev = null; // rowb prev
 
-	private int copyFromMask = ChunkCopyBehaviour.COPY_ALL;
+	private ChunkPredicate copyFromPredicate = null;
 	private ChunksList copyFromList = null;
 
 	/**
@@ -309,7 +311,7 @@ public class PngWriter {
 	}
 
 	protected void queueChunksFromOther() {
-		if (copyFromList == null)
+		if (copyFromList == null || copyFromPredicate == null)
 			return;
 		boolean idatDone = currentChunkGroup >= ChunksList.CHUNK_GROUP_4_IDAT;
 		for (PngChunk chunk : copyFromList.getChunks()) {
@@ -320,40 +322,15 @@ public class PngWriter {
 				continue;
 			if (group >= ChunksList.CHUNK_GROUP_4_IDAT && !idatDone)
 				continue;
-			boolean copy = false;
-			if (chunk.crit) {
-				if (chunk.id.equals(ChunkHelper.PLTE)) {
-					if (imgInfo.indexed && ChunkHelper.maskMatch(copyFromMask, ChunkCopyBehaviour.COPY_PALETTE))
-						copy = true;
-					if (!imgInfo.greyscale && ChunkHelper.maskMatch(copyFromMask, ChunkCopyBehaviour.COPY_ALL))
-						copy = true;
-				}
-			} else { // ancillary
-				boolean text = (chunk instanceof PngChunkTextVar);
-				boolean safe = chunk.safe;
-				// notice that these if are not exclusive
-				if (ChunkHelper.maskMatch(copyFromMask, ChunkCopyBehaviour.COPY_ALL))
-					copy = true;
-				if (safe && ChunkHelper.maskMatch(copyFromMask, ChunkCopyBehaviour.COPY_ALL_SAFE))
-					copy = true;
-				if (chunk.id.equals(ChunkHelper.tRNS)
-						&& ChunkHelper.maskMatch(copyFromMask, ChunkCopyBehaviour.COPY_TRANSPARENCY))
-					copy = true;
-				if (chunk.id.equals(ChunkHelper.pHYs)
-						&& ChunkHelper.maskMatch(copyFromMask, ChunkCopyBehaviour.COPY_PHYS))
-					copy = true;
-				if (text && ChunkHelper.maskMatch(copyFromMask, ChunkCopyBehaviour.COPY_TEXTUAL))
-					copy = true;
-				if (ChunkHelper.maskMatch(copyFromMask, ChunkCopyBehaviour.COPY_ALMOSTALL)
-						&& !(ChunkHelper.isUnknown(chunk) || text || chunk.id.equals(ChunkHelper.hIST) || chunk.id
-								.equals(ChunkHelper.tIME)))
-					copy = true;
-			}
+			if (chunk.crit && !chunk.id.equals(PngChunkPLTE.ID))
+				continue; // critical chunks (except perhaps PLTE) are never copied
+			boolean copy = copyFromPredicate.match(chunk);
 			if (copy) {
-				// if the chunk is already queued or writen, it's ommited!
+				// but if the chunk is already queued or writen, it's ommited!
 				if (chunksList.getEquivalent(chunk).isEmpty() && chunksList.getQueuedEquivalent(chunk).isEmpty()) {
-					PngChunk newchunk = ChunkHelper.cloneForWrite(chunk, imgInfo);
-					chunksList.queue(newchunk);
+					chunksList.queue(chunk);
+					//PngChunk newchunk = ChunkHelper.cloneForWrite(chunk, imgInfo);
+					//chunksList.queue(newchunk);
 				}
 			}
 		}
@@ -384,13 +361,23 @@ public class PngWriter {
 	 * explicitly.
 	 * 
 	 * @param chunks
-	 * @param copyMask 
+	 * @param copyMask
 	 */
 	public void copyChunksFrom(ChunksList chunks, int copyMask) {
+		copyChunksFrom(chunks, ChunkCopyBehaviour.getPredicate(copyMask, imgInfo));
+	}
+
+	public void copyChunksFrom(ChunksList chunks) {
+		copyChunksFrom(chunks, ChunkCopyBehaviour.COPY_ALL);
+	}
+
+	public void copyChunksFrom(ChunksList chunks, ChunkPredicate predicate) {
 		if (copyFromList != null && chunks != null)
 			PngHelperInternal.LOGGER.warning("copyChunksFrom should only be called once");
+		if (predicate == null)
+			throw new PngjOutputException("copyChunksFrom requires a predicate");
 		this.copyFromList = chunks;
-		this.copyFromMask = copyMask;
+		this.copyFromPredicate = predicate;
 	}
 
 	/**
